@@ -3,7 +3,7 @@ from discord.ext import commands
 import json
 import os
 from dotenv import load_dotenv
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
 # 環境変数のロード
 load_dotenv()
@@ -12,15 +12,19 @@ HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
 
 # Hugging Faceモデルセットアップ
 model_name = "cardiffnlp/twitter-roberta-base-offensive"
-classifier = pipeline("text-classification", model=model_name, tokenizer=model_name)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
 
 # ファイル操作関数
 def load_file(file_name):
-    with open(file_name, "r") as file:
+    if not os.path.exists(file_name):
+        return []
+    with open(file_name, "r", encoding="utf-8") as file:
         return [line.strip() for line in file]
 
 def save_file(file_name, data):
-    with open(file_name, "w") as file:
+    with open(file_name, "w", encoding="utf-8") as file:
         for item in data:
             file.write(f"{item}\n")
 
@@ -63,46 +67,41 @@ async def on_message(message):
     if any(word in message.content for word in profanity_list):
         await message.delete()
         await message.channel.send(f"{message.author.mention} 不適切な発言は禁止されています！")
-
-        # ログ記録
-        log_entry = {
-            "message_id": message.id,
-            "content": message.content,
-            "author": message.author.name,
-            "author_id": message.author.id,
-            "channel": message.channel.name,
-            "channel_id": message.channel.id
-        }
-        with open("deleted_messages.json", "a") as log_file:
-            json.dump(log_entry, log_file)
-            log_file.write("\n")
+        log_deleted_message(message)
         return
 
     # AIによる暴言チェック
-    result = classifier(message.content)
-    if result[0]["label"] == "LABEL_1" and result[0]["score"] > 0.8:  # 閾値を調整可能
-        await message.delete()
-        await message.channel.send(f"{message.author.mention} AIにより不適切と判断されました。")
+    try:
+        result = classifier(message.content)
+        if result[0]["label"] == "LABEL_1" and result[0]["score"] > 0.8:  # 閾値を調整可能
+            await message.delete()
+            await message.channel.send(f"{message.author.mention} AIにより不適切と判断されました。")
+            log_deleted_message(message)
+    except Exception as e:
+        await message.channel.send(f"AI処理中にエラーが発生しました: {e}")
+        print(f"Error during AI analysis: {e}")
 
-        # ログ記録
-        log_entry = {
-            "message_id": message.id,
-            "content": message.content,
-            "author": message.author.name,
-            "author_id": message.author.id,
-            "channel": message.channel.name,
-            "channel_id": message.channel.id
-        }
-        with open("deleted_messages.json", "a") as log_file:
-            json.dump(log_entry, log_file)
-            log_file.write("\n")
     await bot.process_commands(message)
+
+# ログ記録
+def log_deleted_message(message):
+    log_entry = {
+        "message_id": message.id,
+        "content": message.content,
+        "author": message.author.name,
+        "author_id": message.author.id,
+        "channel": message.channel.name,
+        "channel_id": message.channel.id
+    }
+    with open("deleted_messages.json", "a", encoding="utf-8") as log_file:
+        json.dump(log_entry, log_file, ensure_ascii=False)
+        log_file.write("\n")
 
 # メッセージ復元
 @bot.command(name="復元")
 async def restore_message(ctx, message_id: int):
     try:
-        with open("deleted_messages.json", "r") as log_file:
+        with open("deleted_messages.json", "r", encoding="utf-8") as log_file:
             for line in log_file:
                 log_entry = json.loads(line)
                 if log_entry["message_id"] == message_id:
