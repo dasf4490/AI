@@ -3,12 +3,16 @@ from discord.ext import commands
 import json
 import os
 from dotenv import load_dotenv
+from transformers import pipeline
 
-# 環境変数を読み込む
+# 環境変数のロード
 load_dotenv()
-
-# トークンとAPIキーを取得
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
+
+# Hugging Faceモデルセットアップ
+model_name = "cardiffnlp/twitter-roberta-base-offensive"
+classifier = pipeline("text-classification", model=model_name, tokenizer=model_name)
 
 # ファイル操作関数
 def load_file(file_name):
@@ -55,7 +59,7 @@ async def on_message(message):
     if any(word in message.content for word in whitelist):
         return
 
-    # 暴言チェック
+    # 辞書ベースの暴言チェック
     if any(word in message.content for word in profanity_list):
         await message.delete()
         await message.channel.send(f"{message.author.mention} 不適切な発言は禁止されています！")
@@ -72,7 +76,26 @@ async def on_message(message):
         with open("deleted_messages.json", "a") as log_file:
             json.dump(log_entry, log_file)
             log_file.write("\n")
+        return
 
+    # AIによる暴言チェック
+    result = classifier(message.content)
+    if result[0]["label"] == "LABEL_1" and result[0]["score"] > 0.8:  # 閾値を調整可能
+        await message.delete()
+        await message.channel.send(f"{message.author.mention} AIにより不適切と判断されました。")
+
+        # ログ記録
+        log_entry = {
+            "message_id": message.id,
+            "content": message.content,
+            "author": message.author.name,
+            "author_id": message.author.id,
+            "channel": message.channel.name,
+            "channel_id": message.channel.id
+        }
+        with open("deleted_messages.json", "a") as log_file:
+            json.dump(log_entry, log_file)
+            log_file.write("\n")
     await bot.process_commands(message)
 
 # メッセージ復元
